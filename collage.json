@@ -1,0 +1,44 @@
+{
+  "$schema": "https://raw.githubusercontent.com/Elagoht/collage-snippets-highlighter/main/schemas/collage-plugin-manifest.schema.json",
+  "name": "elagoht/flash",
+  "description": "A collage plugin for flash messages: a message an action sets before it redirects, shown once by the page it redirects to.",
+  "repository": "https://github.com/Elagoht/collage-flash",
+  "templateFunctions": [
+    {
+      "name": "flashes",
+      "signature": "flashes",
+      "insert": "flashes",
+      "doc": "The flash messages this request arrived with, each with `.Kind` and `.Text`; reading them clears them. `{{range flashes}}…{{end}}`."
+    }
+  ],
+  "snippets": {
+    "collage-flash messages": {
+      "language": "html",
+      "prefix": "cflash",
+      "body": [
+        "{{range flashes}}",
+        "  <p class=\"flash flash--{{.Kind}}\" role=\"status\">{{.Text}}</p>",
+        "{{end}}"
+      ],
+      "description": "collage-flash: show the messages this request arrived with"
+    }
+  },
+  "config": {
+    "type": "object",
+    "description": "A collage plugin for flash messages: a message an action sets before it redirects, shown once by the page it redirects to.",
+    "properties": {
+      "cookie": {
+        "type": "string",
+        "description": "Cookie is the cookie's name. Default \"collage_flash\"."
+      },
+      "key": {
+        "type": "string",
+        "description": "KeyHex is Key, hex-encoded, as configuration carries it."
+      },
+      "maxAge": {
+        "type": "integer",
+        "description": "MaxAge is how many seconds an unshown message waits before it is dropped. Default 300."
+      }
+    }
+  }
+}
