@@ -92,12 +92,13 @@ type Plugin struct {
 func New(opts Options) *Plugin { return &Plugin{opts: opts} }
 
 func (p *Plugin) Name() string                   { return Name }
-func (p *Plugin) Version() string                { return "0.1.2" }
+func (p *Plugin) Version() string                { return "0.1.4" }
 func (p *Plugin) Shutdown(context.Context) error { return nil }
 
 // Configure reads the configuration and adds {{flashes}}.
 func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
-	if err := host.Config(&p.opts); err != nil {
+	var err error
+	if p.opts, err = collage.PluginConfig(host, p.opts); err != nil {
 		return err
 	}
 	p.log = host.Logger()
