@@ -103,6 +103,9 @@ decides: `X-Forwarded-Proto` counts only from `Server.TrustedProxies`.
 | `"key"` (hex in `plugins-config.json`) / `Options.KeyHex` | `"keyEnv"`, naming an environment variable that holds the hex key / `Options.KeyEnv`; `Options.Key` from Go is unchanged |
 | `"maxAge": 300` (integer seconds) / `MaxAge int` | `"maxAge": "5m"` / `MaxAge collage.Duration` |
 
+From Go, write `MaxAge: collage.Duration(5 * time.Minute)`: an untyped `300` now
+means 300ns and stops startup (a `maxAge` under one second is refused).
+
 An old `"key"` now stops the app with `unknown key "key"`, and an integer `maxAge`
 with an error asking for a duration string. Requires collage v0.61.0 (it was built
 against v0.50.0). The cookie's `Secure` flag follows `collage.IsHTTPS`, so a
