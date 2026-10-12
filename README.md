@@ -5,11 +5,11 @@ redirects, shown once by the page it redirects to.
 
 ```go
 app, err := collage.New(&collage.Config{
-	Plugins: []collage.Plugin{flash.New(flash.Options{Key: key})},
+	Plugins: []collage.Plugin{flash.New(flash.Options{})},
 })
 ```
 
-Requires collage v0.50.0 or later. Register it in `Config.Plugins`: it adds a
+Requires collage v0.61.0 or later. Register it in `Config.Plugins`: it adds a
 template function, which only a plugin registered there can.
 
 ## Setting and showing one
@@ -41,7 +41,7 @@ else. A handler of your own adds one with `flash.AddTo(r.Context(), kind, text)`
 
 A message not yet shown is kept when another is added, so a redirect through a page
 that shows none does not lose it. One that is never shown is dropped after
-`MaxAge` seconds.
+`maxAge` (default `"5m"`).
 
 ## The cookie, and the cache
 
@@ -58,11 +58,16 @@ is served as it would be without the plugin.
 ## The key
 
 Set a key of at least 32 random bytes, the same on every instance and across
-restarts — `openssl rand -hex 32` makes one:
+restarts. It is a secret, so it never goes into `plugins-config.json`: put it,
+hex-encoded, in an environment variable (`openssl rand -hex 32` makes one) and name
+that variable in `keyEnv`:
 
 ```json
-{ "elagoht/flash": { "key": "9f2c…" } }
+{ "elagoht/flash": { "keyEnv": "FLASH_KEY" } }
 ```
+
+A variable named but empty, not hex, or shorter than 32 bytes stops the app. From
+Go, set `flash.Options{Key: key}` instead; `keyEnv`, when set, is used over it.
 
 Without one, a key is generated per process and a warning logged: a message set
 just before a restart, or on another instance, is dropped.
@@ -72,9 +77,33 @@ just before a restart, or on another instance, is dropped.
 ```json
 {
   "elagoht/flash": {
-    "key": "hex-encoded, 32 bytes or more",
+    "keyEnv": "FLASH_KEY",
     "cookie": "collage_flash",
-    "maxAge": 300
+    "maxAge": "5m"
   }
 }
 ```
+
+| Option | JSON | Default | |
+| --- | --- | --- | --- |
+| `KeyEnv` | `keyEnv` | | The environment variable holding the key, hex-encoded |
+| `Key` | Go only | generated per process | The key, 32 bytes or more |
+| `Cookie` | `cookie` | `"collage_flash"` | The cookie's name |
+| `MaxAge` | `maxAge` | `"5m"` | How long an unshown message is kept, at least `"1s"`; a duration string |
+
+The cookie is `Secure` when the request came over HTTPS, as `collage.IsHTTPS`
+decides: `X-Forwarded-Proto` counts only from `Server.TrustedProxies`.
+
+## Changes
+
+### Changed in v0.2.0
+
+| Was | Now |
+| --- | --- |
+| `"key"` (hex in `plugins-config.json`) / `Options.KeyHex` | `"keyEnv"`, naming an environment variable that holds the hex key / `Options.KeyEnv`; `Options.Key` from Go is unchanged |
+| `"maxAge": 300` (integer seconds) / `MaxAge int` | `"maxAge": "5m"` / `MaxAge collage.Duration` |
+
+An old `"key"` now stops the app with `unknown key "key"`, and an integer `maxAge`
+with an error asking for a duration string. Requires collage v0.61.0 (it was built
+against v0.50.0). The cookie's `Secure` flag follows `collage.IsHTTPS`, so a
+forged `X-Forwarded-Proto` from outside `Server.TrustedProxies` no longer sets it.

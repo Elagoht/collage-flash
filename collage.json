@@ -28,7 +28,7 @@
       "body": [
         "<div class=\"flash-stack\" aria-live=\"polite\">",
         "  {{range flashes}}",
-        "  <div class=\"flash flash-{{.Kind}}\" role=\"status\">{{.Text}}</div>",
+        "  <div class=\"flash flash--{{.Kind}}\" role=\"status\">{{.Text}}</div>",
         "  {{end}}",
         "</div>",
         "<script nonce=\"{{cspNonce}}\">",
@@ -48,13 +48,18 @@
         "type": "string",
         "description": "Cookie is the cookie's name. Default \"collage_flash\"."
       },
-      "key": {
+      "keyEnv": {
         "type": "string",
-        "description": "KeyHex is Key, hex-encoded, as configuration carries it."
+        "description": "KeyEnv names the environment variable holding the signing key, hex-encoded (`openssl rand -hex 32`). When set, the variable must hold a key, and it is used instead of Key."
       },
       "maxAge": {
-        "type": "integer",
-        "description": "MaxAge is how many seconds an unshown message waits before it is dropped. Default 300."
+        "type": "string",
+        "description": "MaxAge is how long an unshown message waits before it is dropped, at least \"1s\". Default \"5m\".",
+        "pattern": "^(\\d+(\\.\\d+)?(ns|us|µs|ms|s|m|h))+$",
+        "examples": [
+          "30s",
+          "5m"
+        ]
       }
     },
     "additionalProperties": false

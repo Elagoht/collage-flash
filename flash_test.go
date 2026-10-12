@@ -7,49 +7,46 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"testing/fstest"
 	"time"
 
 	flash "github.com/Elagoht/collage-flash"
 	"github.com/Elagoht/collage/pkg/collage"
+	"github.com/Elagoht/collage/pkg/collagetest"
 )
 
 var key = bytes.Repeat([]byte("k"), 32)
 
-func site(t *testing.T) http.Handler {
+// site is the test site: a cached static page showing the messages, and two
+// actions that add one and redirect to it. edits change its configuration.
+func site(t *testing.T, edits ...func(*collage.Config)) http.Handler {
 	t.Helper()
-	app, err := collage.New(&collage.Config{
-		Server: collage.ServerConfig{Host: "localhost", Port: 3000},
-		Template: collage.TemplateConfig{FS: fstest.MapFS{
-			"t/p.html": {Data: []byte(`<main>{{range flashes}}<p class="{{.Kind}}">{{.Text}}</p>{{end}}settings</main>`)},
-		}, Root: "t"},
-		Cache:   collage.CacheConfig{Enabled: true, Type: "memory", DefaultTTL: time.Hour},
-		Plugins: []collage.Plugin{flash.New(flash.Options{Key: key})},
-	})
-	if err != nil {
-		t.Fatal(err)
+	opts := []collagetest.SiteOption{
+		collagetest.WithPlugins(flash.New(flash.Options{Key: key})),
+		collagetest.WithTemplates(map[string]string{
+			"p.html": `<main>{{range flashes}}<p class="{{.Kind}}">{{.Text}}</p>{{end}}settings</main>`,
+		}),
+		collagetest.WithConfig(func(c *collage.Config) {
+			c.Cache = collage.CacheConfig{Enabled: true, Type: "memory", DefaultTTL: time.Hour}
+		}),
+		// Static, so it is cached: a message must never end up in the cached copy.
+		collagetest.WithRegister(
+			collage.NewPage("settings").WithContent(collage.NewFragment("settings", "p.html").Build()).WithPath("en", "/settings").Static().Build(),
+			collage.NewAction("save").WithPath("en", "/save").WithMethods(http.MethodGet).WithHandler(
+				func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
+					flash.Add(rc, flash.Success, "Saved <b>everything</b>")
+					return collage.SeeOther("/settings"), nil
+				}).Build(),
+			collage.NewAction("bounce").WithPath("en", "/bounce").WithMethods(http.MethodGet).WithHandler(
+				func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
+					flash.Add(rc, flash.Info, "Bounced")
+					return collage.SeeOther("/settings"), nil
+				}).Build(),
+		),
 	}
-	// Static, so it is cached: a message must never end up in the cached copy.
-	if err := app.RegisterPage(collage.NewPage("settings").WithContent(collage.NewFragment("settings", "p.html").Build()).WithPath("en", "/settings").Static().Build()); err != nil {
-		t.Fatal(err)
+	for _, edit := range edits {
+		opts = append(opts, collagetest.WithConfig(edit))
 	}
-	for _, a := range []*collage.Action{
-		collage.NewAction("save").WithPath("en", "/save").WithMethods(http.MethodGet).WithHandler(
-			func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
-				flash.Add(rc, flash.Success, "Saved <b>everything</b>")
-				return collage.SeeOther("/settings"), nil
-			}).Build(),
-		collage.NewAction("bounce").WithPath("en", "/bounce").WithMethods(http.MethodGet).WithHandler(
-			func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
-				flash.Add(rc, flash.Info, "Bounced")
-				return collage.SeeOther("/settings"), nil
-			}).Build(),
-	} {
-		if err := app.RegisterAction(a); err != nil {
-			t.Fatal(err)
-		}
-	}
-	return app.Handler()
+	return collagetest.NewSite(t, opts...).App.Handler()
 }
 
 func get(h http.Handler, path string, cookies ...*http.Cookie) *httptest.ResponseRecorder {
@@ -129,5 +126,81 @@ func TestOutsideARequest(t *testing.T) {
 	flash.AddTo(context.Background(), flash.Info, "nothing")
 	if got := flash.Take(nil); got != nil {
 		t.Errorf("Take = %v", got)
+	}
+}
+
+// The cookie is Secure when the request came over HTTPS, as collage.IsHTTPS
+// decides: X-Forwarded-Proto counts only from Server.TrustedProxies.
+func TestSecureFollowsTrustedProxies(t *testing.T) {
+	h := site(t, func(c *collage.Config) { c.Server.TrustedProxies = []string{"10.0.0.1"} })
+	send := func(remote string) *http.Cookie {
+		r := httptest.NewRequest(http.MethodGet, "/save", nil)
+		r.RemoteAddr = remote
+		r.Header.Set("X-Forwarded-Proto", "https")
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, r)
+		return flashCookie(rec)
+	}
+	if c := send("10.0.0.1:1"); c == nil || !c.Secure {
+		t.Errorf("from the trusted proxy: cookie %+v, want Secure", c)
+	}
+	if c := send("203.0.113.9:1"); c == nil || c.Secure {
+		t.Errorf("X-Forwarded-Proto from an untrusted client: cookie %+v, want not Secure", c)
+	}
+}
+
+// keyEnv names the variable holding the key, hex-encoded; a variable named but
+// empty, or not hex, stops the app.
+func TestKeyEnv(t *testing.T) {
+	t.Setenv("FLASH_TEST_KEY", strings.Repeat("ab", 32))
+	collagetest.NewSite(t,
+		collagetest.WithPlugins(flash.New(flash.Options{})),
+		collagetest.WithPluginConfig(flash.Name, `{"keyEnv":"FLASH_TEST_KEY"}`),
+	)
+	for value, want := range map[string]string{"": "is empty", "nothex": "is not hex", "abcd": "at least 32 bytes"} {
+		t.Setenv("FLASH_TEST_KEY", value)
+		_, err := collagetest.TrySite(t,
+			collagetest.WithPlugins(flash.New(flash.Options{})),
+			collagetest.WithPluginConfig(flash.Name, `{"keyEnv":"FLASH_TEST_KEY"}`),
+		)
+		if err == nil || !strings.Contains(err.Error(), "flash:") || !strings.Contains(err.Error(), want) {
+			t.Errorf("FLASH_TEST_KEY=%q: err = %v, want %q", value, err, want)
+		}
+	}
+}
+
+// The key no longer goes into plugins-config.json, and maxAge is a duration
+// string: both old forms now stop the app.
+func TestOldConfigFails(t *testing.T) {
+	for raw, want := range map[string]string{
+		`{"key":"` + strings.Repeat("ab", 32) + `"}`: `unknown key "key"`,
+		`{"maxAge":300}`:   "as a string",
+		`{"maxAge":"1ms"}`: "at least 1s",
+	} {
+		_, err := collagetest.TrySite(t,
+			collagetest.WithPlugins(flash.New(flash.Options{Key: key})),
+			collagetest.WithPluginConfig(flash.Name, raw),
+		)
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: err = %v, want %q", raw, err, want)
+		}
+	}
+}
+
+// maxAge is the cookie's Max-Age, in seconds.
+func TestMaxAge(t *testing.T) {
+	if c := flashCookie(get(site(t), "/save")); c == nil || c.MaxAge != 300 {
+		t.Errorf("default: cookie %+v, want Max-Age 300", c)
+	}
+	h := collagetest.NewSite(t,
+		collagetest.WithPlugins(flash.New(flash.Options{Key: key, MaxAge: collage.Duration(time.Hour)})),
+		collagetest.WithRegister(collage.NewAction("save").WithPath("en", "/save").WithMethods(http.MethodGet).WithHandler(
+			func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
+				flash.Add(rc, flash.Info, "x")
+				return collage.SeeOther("/"), nil
+			}).Build()),
+	).App.Handler()
+	if c := flashCookie(get(h, "/save")); c == nil || c.MaxAge != 3600 {
+		t.Errorf("1h: cookie %+v, want Max-Age 3600", c)
 	}
 }

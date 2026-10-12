@@ -2,6 +2,13 @@
 // before it redirects, shown once by the page it redirects to.
 //
 //	app, err := collage.New(&collage.Config{
+//		Plugins: []collage.Plugin{flash.New(flash.Options{})},
+//	})
+//
+// with the signing key in an environment variable named by "keyEnv" in
+// plugins-config.json, or set from Go:
+//
+//	app, err := collage.New(&collage.Config{
 //		Plugins: []collage.Plugin{flash.New(flash.Options{Key: key})},
 //	})
 //
@@ -35,8 +42,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/Elagoht/collage/pkg/collage"
 )
@@ -61,18 +70,20 @@ type Message struct {
 
 // Options configures the plugin.
 type Options struct {
-	// Key signs the cookie: at least 32 random bytes, the same on every instance
-	// and across restarts. Unset, one is generated per process, and a message set
-	// just before a restart, or on another instance, is dropped. In configuration
-	// it is "key", hex-encoded.
+	// KeyEnv names the environment variable holding the signing key, hex-encoded
+	// (`openssl rand -hex 32`). When set, the variable must hold a key, and it is
+	// used instead of Key.
+	KeyEnv string `json:"keyEnv"`
+	// Key signs the cookie from Go: at least 32 random bytes, the same on every
+	// instance and across restarts. With neither KeyEnv nor Key, one is
+	// generated per process, and a message set just before a restart, or on
+	// another instance, is dropped.
 	Key []byte `json:"-"`
-	// KeyHex is Key, hex-encoded, as configuration carries it.
-	KeyHex string `json:"key"`
 	// Cookie is the cookie's name. Default "collage_flash".
 	Cookie string `json:"cookie"`
-	// MaxAge is how many seconds an unshown message waits before it is dropped.
-	// Default 300.
-	MaxAge int `json:"maxAge"`
+	// MaxAge is how long an unshown message waits before it is dropped, at
+	// least "1s". Default "5m".
+	MaxAge collage.Duration `json:"maxAge"`
 }
 
 // Limits keep the cookie under the four kilobytes a browser keeps of one.
@@ -92,7 +103,7 @@ type Plugin struct {
 func New(opts Options) *Plugin { return &Plugin{opts: opts} }
 
 func (p *Plugin) Name() string                   { return Name }
-func (p *Plugin) Version() string                { return "0.1.4" }
+func (p *Plugin) Version() string                { return "0.2.0" }
 func (p *Plugin) Shutdown(context.Context) error { return nil }
 
 // Configure reads the configuration and adds {{flashes}}.
@@ -102,10 +113,14 @@ func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
 		return err
 	}
 	p.log = host.Logger()
-	if p.opts.KeyHex != "" {
-		key, err := hex.DecodeString(p.opts.KeyHex)
+	if name := p.opts.KeyEnv; name != "" {
+		value := os.Getenv(name)
+		if value == "" {
+			return fmt.Errorf("flash: the environment variable %s is empty", name)
+		}
+		key, err := hex.DecodeString(value)
 		if err != nil {
-			return fmt.Errorf("flash: key: %w", err)
+			return fmt.Errorf("flash: the environment variable %s is not hex: %w", name, err)
 		}
 		p.opts.Key = key
 	}
@@ -121,8 +136,11 @@ func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
 	if p.opts.Cookie == "" {
 		p.opts.Cookie = "collage_flash"
 	}
-	if p.opts.MaxAge <= 0 {
-		p.opts.MaxAge = 300
+	switch {
+	case p.opts.MaxAge == 0:
+		p.opts.MaxAge = collage.Duration(5 * time.Minute)
+	case p.opts.MaxAge < collage.Duration(time.Second):
+		return fmt.Errorf("flash: maxAge %s must be at least 1s", p.opts.MaxAge)
 	}
 	return host.AddRenderFunc("flashes", func(rc *collage.RenderContext) any { // any: html/template.FuncMap's own value type
 		return func() []Message { return Take(rc) }
@@ -243,7 +261,7 @@ func (w *flashWriter) commit() {
 				messages = messages[len(messages)-maxMessages:]
 			}
 		}
-		http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, w.plugin.encode(messages), w.plugin.opts.MaxAge))
+		http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, w.plugin.encode(messages), int(time.Duration(w.plugin.opts.MaxAge)/time.Second)))
 	case b.taken && len(b.incoming) > 0:
 		http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, "", -1))
 	}
@@ -278,7 +296,7 @@ func (p *Plugin) cookie(r *http.Request, value string, maxAge int) *http.Cookie 
 		MaxAge:   maxAge,
 		HttpOnly: true,
 		SameSite: http.SameSiteLaxMode,
-		Secure:   r.TLS != nil || strings.EqualFold(r.Header.Get("X-Forwarded-Proto"), "https"),
+		Secure:   collage.IsHTTPS(r),
 	}
 }
 
