@@ -3,7 +3,7 @@
   "name": "elagoht/flash",
   "description": "A collage plugin for flash messages: a message an action sets before it redirects, shown once by the page it redirects to.",
   "repository": "https://github.com/Elagoht/collage-flash",
-  "setup": "In the layout, `templates/layouts/default.html`: `{{range flashes}}<p class=\"flash flash--{{.Kind}}\">{{.Text}}</p>{{end}}`.\nIn an action, before it redirects: `flash.Add(rc, flash.Success, \"Saved.\")`.\nSet `\"keyEnv\": \"FLASH_KEY\"` in `plugins-config.json`, and `FLASH_KEY=` (`openssl rand -hex 32`) in `.env.development` and where production runs.",
+  "setup": "In the layout, `templates/layouts/master.html`: `{{range flashes}}<p class=\"flash flash--{{.Kind}}\">{{.Text}}</p>{{end}}`.\nIn an action, before it redirects: `flash.Add(rc, flash.Success, \"Saved.\")`.\nSet `\"keyEnv\": \"FLASH_KEY\"` in `plugins-config.json`, and `FLASH_KEY=` (`openssl rand -hex 32`) in `.env.development` and where production runs.",
   "templateFunctions": [
     {
       "name": "flashes",
