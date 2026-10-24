@@ -169,6 +169,29 @@ func TestKeyEnv(t *testing.T) {
 	}
 }
 
+// With no keyEnv and no Key, FLASH_KEY is read; a Key set in Go, or a keyEnv
+// named, wins over it.
+func TestDefaultKeyEnv(t *testing.T) {
+	for value, want := range map[string]string{"nothex": "FLASH_KEY is not hex", "abcd": "at least 32 bytes"} {
+		t.Setenv(flash.DefaultKeyEnv, value)
+		_, err := collagetest.TrySite(t, collagetest.WithPlugins(flash.New(flash.Options{})))
+		if err == nil || !strings.Contains(err.Error(), want) || strings.Contains(err.Error(), "U+") {
+			t.Errorf("FLASH_KEY=%q: err = %v, want %q and no byte of the key", value, err, want)
+		}
+	}
+	t.Setenv(flash.DefaultKeyEnv, "nothex")
+	collagetest.NewSite(t, collagetest.WithPlugins(flash.New(flash.Options{Key: key})))
+	t.Setenv("FLASH_TEST_KEY", strings.Repeat("ab", 32))
+	collagetest.NewSite(t,
+		collagetest.WithPlugins(flash.New(flash.Options{})),
+		collagetest.WithPluginConfig(flash.Name, `{"keyEnv":"FLASH_TEST_KEY"}`),
+	)
+	t.Setenv(flash.DefaultKeyEnv, "")
+	collagetest.NewSite(t, collagetest.WithPlugins(flash.New(flash.Options{})))
+	t.Setenv(flash.DefaultKeyEnv, strings.Repeat("cd", 32))
+	collagetest.NewSite(t, collagetest.WithPlugins(flash.New(flash.Options{})))
+}
+
 // The key no longer goes into plugins-config.json, and maxAge is a duration
 // string: both old forms now stop the app.
 func TestOldConfigFails(t *testing.T) {

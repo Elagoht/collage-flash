@@ -72,12 +72,13 @@ type Message struct {
 type Options struct {
 	// KeyEnv names the environment variable holding the signing key, hex-encoded
 	// (`openssl rand -hex 32`). When set, the variable must hold a key, and it is
-	// used instead of Key.
+	// used instead of Key. Unset, FLASH_KEY (DefaultKeyEnv) is read.
 	KeyEnv string `json:"keyEnv"`
 	// Key signs the cookie from Go: at least 32 random bytes, the same on every
-	// instance and across restarts. With neither KeyEnv nor Key, one is
-	// generated per process, and a message set just before a restart, or on
-	// another instance, is dropped.
+	// instance and across restarts. With neither KeyEnv nor Key, the key is read
+	// from FLASH_KEY (DefaultKeyEnv); with that empty too, one is generated per
+	// process, and a message set just before a restart, or on another instance,
+	// is dropped.
 	Key []byte `json:"-"`
 	// Cookie is the cookie's name. Default "collage_flash".
 	Cookie string `json:"cookie"`
@@ -85,6 +86,10 @@ type Options struct {
 	// least "1s". Default "5m".
 	MaxAge collage.Duration `json:"maxAge"`
 }
+
+// DefaultKeyEnv is the environment variable the key is read from when neither
+// KeyEnv nor Key is set. Unlike one KeyEnv names, it may be unset or empty.
+const DefaultKeyEnv = "FLASH_KEY"
 
 // Limits keep the cookie under the four kilobytes a browser keeps of one.
 const (
@@ -103,7 +108,7 @@ type Plugin struct {
 func New(opts Options) *Plugin { return &Plugin{opts: opts} }
 
 func (p *Plugin) Name() string                   { return Name }
-func (p *Plugin) Version() string                { return "0.2.1" }
+func (p *Plugin) Version() string                { return "0.3.0" }
 func (p *Plugin) Shutdown(context.Context) error { return nil }
 
 // Configure reads the configuration and adds {{flashes}}.
@@ -120,7 +125,13 @@ func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
 		}
 		key, err := hex.DecodeString(value)
 		if err != nil {
-			return fmt.Errorf("flash: the environment variable %s is not hex: %w", name, err)
+			return fmt.Errorf("flash: the environment variable %s is not hex", name)
+		}
+		p.opts.Key = key
+	} else if value := os.Getenv(DefaultKeyEnv); value != "" && len(p.opts.Key) == 0 {
+		key, err := hex.DecodeString(value)
+		if err != nil {
+			return fmt.Errorf("flash: the environment variable %s is not hex", DefaultKeyEnv)
 		}
 		p.opts.Key = key
 	}
@@ -129,7 +140,7 @@ func (p *Plugin) Configure(_ context.Context, host collage.ConfigHost) error {
 		if _, err := rand.Read(p.opts.Key); err != nil {
 			return fmt.Errorf("flash: %w", err)
 		}
-		p.log.Warn("flash: no key set, so one was generated for this process; a message set before a restart, or on another instance, is dropped")
+		p.log.Warn("flash: no key set (" + DefaultKeyEnv + " is empty), so one was generated for this process; a message set before a restart, or on another instance, is dropped")
 	} else if len(p.opts.Key) < 32 {
 		return errors.New("flash: the key must be at least 32 bytes")
 	}

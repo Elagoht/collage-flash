@@ -59,15 +59,23 @@ is served as it would be without the plugin.
 
 Set a key of at least 32 random bytes, the same on every instance and across
 restarts. It is a secret, so it never goes into `plugins-config.json`: put it,
-hex-encoded, in an environment variable (`openssl rand -hex 32` makes one) and name
-that variable in `keyEnv`:
+hex-encoded, in the environment variable `FLASH_KEY` (`openssl rand -hex 32`
+makes one), which is read with nothing configured:
 
-```json
-{ "elagoht/flash": { "keyEnv": "FLASH_KEY" } }
+```sh
+FLASH_KEY=…  # in .env.development, and where production runs
 ```
 
-A variable named but empty, not hex, or shorter than 32 bytes stops the app. From
-Go, set `flash.Options{Key: key}` instead; `keyEnv`, when set, is used over it.
+To read another variable, name it in `keyEnv`:
+
+```json
+{ "elagoht/flash": { "keyEnv": "MY_FLASH_KEY" } }
+```
+
+A variable named but empty, not hex, or shorter than 32 bytes stops the app;
+`FLASH_KEY` may be unset or empty, and not hex or too short it stops the app
+too. From Go, set `flash.Options{Key: key}` instead; `keyEnv`, when set, is used
+over it, and it is used over `FLASH_KEY`.
 
 Without one, a key is generated per process and a warning logged: a message set
 just before a restart, or on another instance, is dropped.
@@ -77,7 +85,7 @@ just before a restart, or on another instance, is dropped.
 ```json
 {
   "elagoht/flash": {
-    "keyEnv": "FLASH_KEY",
+    "keyEnv": "",
     "cookie": "collage_flash",
     "maxAge": "5m"
   }
@@ -86,8 +94,8 @@ just before a restart, or on another instance, is dropped.
 
 | Option | JSON | Default | |
 | --- | --- | --- | --- |
-| `KeyEnv` | `keyEnv` | | The environment variable holding the key, hex-encoded |
-| `Key` | Go only | generated per process | The key, 32 bytes or more |
+| `KeyEnv` | `keyEnv` | `FLASH_KEY` | The environment variable holding the key, hex-encoded |
+| `Key` | Go only | from `FLASH_KEY`, else generated per process | The key, 32 bytes or more |
 | `Cookie` | `cookie` | `"collage_flash"` | The cookie's name |
 | `MaxAge` | `maxAge` | `"5m"` | How long an unshown message is kept, at least `"1s"`; a duration string |
 
