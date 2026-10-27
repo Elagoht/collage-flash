@@ -47,8 +47,12 @@ that shows none does not lose it. One that is never shown is dropped after
 
 The messages travel in a cookie, `HttpOnly`, `SameSite=Lax`, and signed with
 HMAC-SHA256: a reader cannot put words in the site's mouth. At most eight messages
-of 300 characters are kept, which stays inside the four kilobytes a browser keeps
-of a cookie.
+of 300 characters are kept, and the cookie is measured as it is written: a browser
+drops a cookie over four kilobytes whole, so a `Set-Cookie` line — name, value and
+attributes — is never written over 4096 bytes. Text that grows when encoded
+(non-ASCII letters, or `<`, `>` and `&`, six bytes each in JSON) can pass that with
+fewer messages; the oldest are then dropped until the rest fit, a single message
+too big on its own is cut short, and a warning is logged.
 
 A request carrying a message is answered with a fresh render that is neither read
 from the page cache nor written to it, and marked `private, no-store`: a cached
@@ -103,6 +107,14 @@ The cookie is `Secure` when the request came over HTTPS, as `collage.IsHTTPS`
 decides: `X-Forwarded-Proto` counts only from `Server.TrustedProxies`.
 
 ## Changes
+
+### Changed in v0.3.1
+
+- The cookie is never written over 4096 bytes. Eight messages of 300 non-ASCII
+  characters, or three of 300 `<`, made a cookie of 6–7 KB that browsers drop
+  whole, losing every message silently. Now the oldest messages are dropped (and
+  a lone message too big is cut short) until the cookie fits, with a warning
+  logged.
 
 ### Changed in v0.2.0
 

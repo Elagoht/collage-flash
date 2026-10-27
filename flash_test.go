@@ -3,6 +3,8 @@ package flash_test
 import (
 	"bytes"
 	"context"
+	"html/template"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -225,5 +227,75 @@ func TestMaxAge(t *testing.T) {
 	).App.Handler()
 	if c := flashCookie(get(h, "/save")); c == nil || c.MaxAge != 3600 {
 		t.Errorf("1h: cookie %+v, want Max-Age 3600", c)
+	}
+}
+
+// The cookie stays within the four kilobytes a browser keeps of one, counted as
+// the whole Set-Cookie line: messages whose text grows when encoded — non-ASCII
+// letters, or <, > and & that JSON writes as six bytes — drop the oldest until
+// the rest fit, and the newest is still shown. (PLUGA-B06)
+func TestCookieFitsFourKilobytes(t *testing.T) {
+	cases := []struct {
+		name  string
+		count int
+		kind  string
+		text  string
+		// shown is the start of the message the next page shows; "" when none
+		// can fit.
+		shown string
+	}{
+		{"non-ASCII", 8, flash.Success, strings.Repeat("ş", 290), strings.Repeat("ş", 290) + "!!!!!!!"},
+		{"escaped", 3, flash.Error, strings.Repeat("<", 290), strings.Repeat("<", 290) + "!!"},
+		// Too big alone: its text is cut short.
+		{"cut", 1, strings.Repeat("k", 2500), strings.Repeat("<", 290), "<<<"},
+		{"no room", 1, strings.Repeat("k", 5000), strings.Repeat("x", 300), ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			site := collagetest.NewSite(t,
+				collagetest.WithPlugins(flash.New(flash.Options{Key: key})),
+				collagetest.WithTemplates(map[string]string{
+					"p.html": `<main>{{range flashes}}<p>{{.Text}}</p>{{end}}</main>`,
+				}),
+				collagetest.WithRegister(
+					collage.NewPage("shown").WithContent(collage.NewFragment("shown", "p.html").Build()).WithPath("en", "/shown").Build(),
+					collage.NewAction("many").WithPath("en", "/many").WithMethods(http.MethodGet).WithHandler(
+						func(_ context.Context, rc *collage.RenderContext) (*collage.ActionResult, error) {
+							for i := range tc.count {
+								flash.Add(rc, tc.kind, tc.text+strings.Repeat("!", i))
+							}
+							return collage.SeeOther("/shown"), nil
+						}).Build(),
+				),
+			)
+			h := site.App.Handler()
+			rec := get(h, "/many")
+			for _, line := range rec.Result().Header.Values("Set-Cookie") {
+				if len(line) > 4096 {
+					t.Fatalf("Set-Cookie is %d bytes, over 4096", len(line))
+				}
+			}
+			c := flashCookie(rec)
+			if tc.shown == "" {
+				// A message that cannot fit at all is dropped, not written too big.
+				if c != nil {
+					t.Fatalf("a message too big to fit was written: %d bytes", len(c.String()))
+				}
+				if !site.Logs.Has(slog.LevelWarn, "flash:") {
+					t.Error("dropping a message logged no warning")
+				}
+				return
+			}
+			if c == nil {
+				t.Fatal("no cookie written")
+			}
+			body := get(h, "/shown", c).Body.String()
+			if !strings.Contains(body, "<p>"+template.HTMLEscapeString(tc.shown)) || strings.Count(body, "<p>") >= tc.count && tc.count > 1 {
+				t.Errorf("the newest message is not shown:\n%.300s", body)
+			}
+			if !site.Logs.Has(slog.LevelWarn, "flash:") {
+				t.Error("dropping messages logged no warning")
+			}
+		})
 	}
 }

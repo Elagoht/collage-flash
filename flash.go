@@ -91,10 +91,15 @@ type Options struct {
 // KeyEnv nor Key is set. Unlike one KeyEnv names, it may be unset or empty.
 const DefaultKeyEnv = "FLASH_KEY"
 
-// Limits keep the cookie under the four kilobytes a browser keeps of one.
+// Limits on what is kept. They count messages and characters, not the bytes a
+// message takes once encoded, so the cookie is also measured as it is written:
+// maxCookie is the most a whole Set-Cookie line may be — name, value and
+// attributes — within the four kilobytes a browser keeps of one cookie and drops
+// whole past.
 const (
 	maxMessages = 8
 	maxText     = 300
+	maxCookie   = 4096
 )
 
 // Plugin carries the messages.
@@ -108,7 +113,7 @@ type Plugin struct {
 func New(opts Options) *Plugin { return &Plugin{opts: opts} }
 
 func (p *Plugin) Name() string                   { return Name }
-func (p *Plugin) Version() string                { return "0.3.0" }
+func (p *Plugin) Version() string                { return "0.3.1" }
 func (p *Plugin) Shutdown(context.Context) error { return nil }
 
 // Configure reads the configuration and adds {{flashes}}.
@@ -272,7 +277,11 @@ func (w *flashWriter) commit() {
 				messages = messages[len(messages)-maxMessages:]
 			}
 		}
-		http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, w.plugin.encode(messages), int(time.Duration(w.plugin.opts.MaxAge)/time.Second)))
+		if c := w.plugin.fit(w.request, messages); c != nil {
+			http.SetCookie(w.ResponseWriter, c)
+		} else if len(b.incoming) > 0 {
+			http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, "", -1))
+		}
 	case b.taken && len(b.incoming) > 0:
 		http.SetCookie(w.ResponseWriter, w.plugin.cookie(w.request, "", -1))
 	}
@@ -309,6 +318,45 @@ func (p *Plugin) cookie(r *http.Request, value string, maxAge int) *http.Cookie 
 		SameSite: http.SameSiteLaxMode,
 		Secure:   collage.IsHTTPS(r),
 	}
+}
+
+// fit is the cookie carrying messages, within maxCookie bytes. Past it, the
+// oldest messages are dropped and, when one alone is too big, its text is cut
+// short; a message that does not fit even without text is dropped, and fit
+// returns nil when none is left. Anything it drops or cuts is logged, since
+// the reader will not see it.
+func (p *Plugin) fit(r *http.Request, messages []Message) *http.Cookie {
+	maxAge := int(time.Duration(p.opts.MaxAge) / time.Second)
+	dropped, cut := 0, false
+	defer func() {
+		if (dropped > 0 || cut) && p.log != nil {
+			p.log.Warn("flash: messages do not fit the 4096-byte cookie a browser keeps; the oldest were dropped or cut short",
+				"dropped", dropped, "cut", cut)
+		}
+	}()
+	for len(messages) > 0 {
+		c := p.cookie(r, p.encode(messages), maxAge)
+		over := len(c.String()) - maxCookie
+		if over <= 0 {
+			return c
+		}
+		if len(messages) > 1 {
+			messages = messages[1:]
+			dropped++
+			continue
+		}
+		text := []rune(messages[0].Text)
+		if len(text) == 0 {
+			dropped++
+			return nil
+		}
+		// A character is at most eight bytes once JSON-escaped and base64'd, so
+		// cutting over/8 of them, at least one, never cuts more than needed by
+		// much, and the loop measures again.
+		cut = true
+		messages = []Message{{Kind: messages[0].Kind, Text: string(text[:len(text)-min(len(text), max(1, over/8))])}}
+	}
+	return nil
 }
 
 // encode signs messages: base64url(JSON) "." base64url(HMAC-SHA256).
